@@ -17,6 +17,7 @@ namespace JT
             "com.unity.nuget.newtonsoft-json",
             "https://github.com/neuecc/UniRx.git?path=Assets/Plugins/UniRx/Scripts",
             "https://github.com/Cysharp/UniTask.git?path=src/UniTask/Assets/Plugins/UniTask",
+            "https://github.com/hadashiA/VContainer.git?path=VContainer/Assets/VContainer#1.16.8",
         };
 
         private string _githubToken;
