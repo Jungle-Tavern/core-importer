@@ -1,8 +1,8 @@
 using System;
 using System.Collections;
 using System.IO;
-using ICSharpCode.SharpZipLib.Core;
-using ICSharpCode.SharpZipLib.Zip;
+using Unity.SharpZipLib.Core;
+using Unity.SharpZipLib.Zip;
 using Unity.EditorCoroutines.Editor;
 using UnityEditor;
 using UnityEditor.PackageManager;
