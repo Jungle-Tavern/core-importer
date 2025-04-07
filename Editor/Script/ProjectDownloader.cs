@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.IO;
+using System.Linq;
 using Unity.SharpZipLib.Core;
 using Unity.SharpZipLib.Zip;
 using Unity.EditorCoroutines.Editor;
@@ -10,7 +11,7 @@ using UnityEngine;
 
 namespace JT
 {
-    public class ProjectDownloader : EditorWindow
+    public class ProjectDownloader
     {
         private static readonly string[] PackagePaths =
         {
@@ -20,76 +21,87 @@ namespace JT
             "https://github.com/hadashiA/VContainer.git?path=VContainer/Assets/VContainer#1.16.8",
         };
 
-        private string _githubToken;
-        
         private EditorCoroutine _coroutine;
 
-        private void OnEnable()
-        {
-            TryLoadToken();
-        }
-        
-        private void TryLoadToken()
-        {
-            _githubToken = TokenPrefsHelper.Load();
-        }
-
-        private void OnGUI()
-        {
-            EditorGUILayout.Space();
-            EditorGUILayout.Space();
-
-            _githubToken = EditorGUILayout.TextField("Token", _githubToken);
-            
-            if (GUILayout.Button("Save Github Token"))
-            {
-                TokenPrefsHelper.Save(_githubToken);
-            }
-            
-            GUILayout.Space(10);
-            
-            if (GUILayout.Button($"Import Core Packages"))
-            {
-                SetupPackages();
-            }
-        }
-
-        [MenuItem("Tools/Core Importer")]
-        private static void ShowProjectSettingsTuner()
-        {
-            ShowProjectDownloaderWindow();
-        }
-
-        private static void ShowProjectDownloaderWindow()
-        {
-            ProjectDownloader window =
-                (ProjectDownloader)GetWindow(typeof(ProjectDownloader));
-            window.titleContent.text = "Core Importer";
-            window.Show();
-        }
-        
-        private void SetupPackages()
+        public void SetupPackages(string token)
         {
             if (_coroutine != null)
             {
                 EditorCoroutineUtility.StopCoroutine(_coroutine);
                 _coroutine = null;
             }
+
+            int startIndex = SessionState.GetBool(DownloadingConstants.IsInstallingPackagesKey, false)
+                ? SessionState.GetInt(DownloadingConstants.PackageIndexKey, 0)
+                : 0;
+
+            _coroutine = EditorCoroutineUtility.StartCoroutineOwnerless(PackageInstallerCor(token, startIndex));
+        }
+        
+        public void ResumeInstallingPackages(string token)
+        {
+            if (!SessionState.GetBool(DownloadingConstants.IsInstallingPackagesKey, false)) return;
+
+            int index = SessionState.GetInt(DownloadingConstants.PackageIndexKey, 0);
+            _coroutine = EditorCoroutineUtility.StartCoroutineOwnerless(PackageInstallerCor(token, index));
+        }
+        
+        private IEnumerator PackageInstallerCor(string token, int startIndex)
+        {
+            var listRequest = Client.List(true);
+            while (!listRequest.IsCompleted) yield return null;
+
+            var installedPackages = listRequest.Result;
+
+            SessionState.SetBool(DownloadingConstants.IsInstallingPackagesKey, true);
+
+            for (int i = startIndex; i < PackagePaths.Length; i++)
+            {
+                var package = PackagePaths[i];
+
+                if (installedPackages.Any(p => package.Contains(p.name))) continue;
+
+                Debug.Log($"Installing: {package}");
+                SessionState.SetInt(DownloadingConstants.PackageIndexKey, i);
+
+                yield return PackagesImportingCor(package);
+            }
+
+            EditorUtility.ClearProgressBar();
+            Debug.Log("All packages installed.");
             
-            _coroutine = EditorCoroutineUtility.StartCoroutine(Cor(), this);
+            DownloadProject(token);
+            
+            SessionState.EraseInt(DownloadingConstants.PackageIndexKey);
+            SessionState.SetBool(DownloadingConstants.IsInstallingPackagesKey, false);
         }
 
-        private IEnumerator Cor()
+        private IEnumerator PackagesImportingCor(string package)
         {
-            foreach (var package in PackagePaths)
+            var request = Client.Add(package);
+            EditorUtility.DisplayProgressBar("Importing", $"Importing package: {package}", 0);
+
+            float startTime = Time.realtimeSinceStartup;
+            const float timeout = 30f;
+
+            yield return new WaitUntil(() =>
             {
-                var request = Client.Add(package);
-                EditorUtility.DisplayProgressBar("Importing", "Importing packages", 0);
-                yield return new WaitUntil(() => request.IsCompleted);
-                EditorUtility.ClearProgressBar();
+                bool isStuck = (Time.realtimeSinceStartup - startTime) > timeout;
+                if (isStuck)
+                {
+                    Debug.LogError($"Package installation timeout: {package}");
+                    return true;
+                }
+
+                return request.IsCompleted;
+            });
+
+            EditorUtility.ClearProgressBar();
+
+            if (request.Status == StatusCode.Failure)
+            {
+                Debug.LogError($"Failed to import package: {package}\n{request.Error?.message}");
             }
-            
-            DownloadProject();
         }
         
         private static void SaveByteArrayToFileWithFileStream(byte[] data, string filePath)
@@ -142,7 +154,7 @@ namespace JT
             }
         }
         
-        private void DownloadProject()
+        private void DownloadProject(string token)
         {
             var url = "https://github.com/Jungle-Tavern/core/zipball/master/";
             var pathToFolder = Path.Combine(Application.dataPath, "Meta");
@@ -150,13 +162,12 @@ namespace JT
             using (var client = new System.Net.Http.HttpClient())
             {
                 var credentials =
-                    string.Format(System.Globalization.CultureInfo.InvariantCulture, "{0}:", _githubToken);
+                    string.Format(System.Globalization.CultureInfo.InvariantCulture, "{0}:", token);
                 credentials = Convert.ToBase64String(System.Text.Encoding.ASCII.GetBytes(credentials));
                 client.DefaultRequestHeaders.Authorization =
                     new System.Net.Http.Headers.AuthenticationHeaderValue("Basic", credentials);
                 var contents = client.GetByteArrayAsync(url).Result;
                 EditorUtility.DisplayProgressBar("Download", "Download Repository zip", 0);
-                
                 try
                 {
                     var pathToFile = Path.Combine(Application.dataPath, "RepositoryArchive");
